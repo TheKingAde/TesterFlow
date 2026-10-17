@@ -6,6 +6,7 @@ import asyncio
 import logging
 import re
 import subprocess
+import time
 import uuid
 from pathlib import Path
 
@@ -25,7 +26,16 @@ from compiler import compile_ea
 from jobs import Run, Submission, parse_config
 from mt5files import parse_inputs, read_text_any, write_set_file, write_tester_ini
 from report import format_summary, parse_report
-from runner import TesterRunner, collect_outputs, tester_log_tail
+from runner import (
+    TesterRunner,
+    collect_outputs,
+    journal_since,
+    journal_tail,
+    saved_account_summary,
+    terminal_running,
+    tester_log_tail,
+    warm_up,
+)
 
 logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s", level=logging.INFO
@@ -37,6 +47,7 @@ PENDING: list = []                 # submissions waiting or running (for /queue)
 RUNNER = TesterRunner()
 LAST_INPUTS: dict = {}             # user_id -> inputs parsed from their last EA
 SAVED_CONFIG: dict = {}            # user_id -> (settings, runs) from a text message
+STATE = {"login_ok": False}        # True once the backtest terminal has connected
 
 HELP = """MT5 backtest bot
 
@@ -56,6 +67,8 @@ model: 0 every tick, 1 1-min OHLC, 2 open prices, 4 real ticks
 /clear  drop everything still waiting
 /inputs list the inputs found in your last uploaded EA
 /config show your saved config      /resetconfig  forget it
+/login  connect the backtest terminal to your broker and report what happens
+/diag   show the account the backtest terminal will use and its journal
 /source show where includes are copied from before each compile
 /setsource <path>  set that MQL5 folder (or the terminal data folder that
         contains it); '/setsource off' disables syncing"""
@@ -75,6 +88,42 @@ def safe_name(stem: str) -> str:
 
 def trim(text: str, limit: int = 3500) -> str:
     return text if len(text) <= limit else "…" + text[-limit:]
+
+
+def account_configured() -> bool:
+    """True if the tester has an account: set in .env, or saved by a manual login."""
+    if config.MT5_LOGIN and config.MT5_SERVER:
+        return True
+    ini = config.TERMINAL_DIR / "config" / "common.ini"
+    try:
+        text = read_text_any(ini)
+    except OSError:
+        return False
+    match = re.search(r"(?im)^\s*Login\s*=\s*(\d+)", text)
+    return bool(match and int(match.group(1)) > 0)
+
+
+def diagnose(log_text: str) -> str:
+    """Plain-English hint for the most common 'no report' causes."""
+    low = log_text.lower()
+    hints = []
+    if "not synchronized" in low:
+        hints.append(
+            "The backtest terminal was not connected to a broker server when the test "
+            "started. Send /login to see exactly why it cannot connect."
+        )
+    if "account is not specified" in low:
+        hints.append(
+            "No account is saved in the backtest terminal. Send /login, or set "
+            "MT5_LOGIN / MT5_SERVER / MT5_PASSWORD in .env."
+        )
+    if "cannot select symbol" in low and "not synchronized" not in low:
+        hints.append(
+            "The symbol is not available in the backtest terminal's Market Watch. "
+            "Check the exact broker symbol name (e.g. XAUUSD.m or GOLD) and use it "
+            "in the config: symbol=<name>."
+        )
+    return "\n\n".join(hints)
 
 
 # --------------------------------------------------------------------------
@@ -151,6 +200,39 @@ async def cmd_resetconfig(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Saved config cleared.")
 
 
+async def cmd_login(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Connect the backtest terminal to the broker now and report the result."""
+    if not authorised(update):
+        return
+    if any(s.state in ("compiling", "running") for s in PENDING):
+        await update.message.reply_text("A backtest is running. Try /login when it is done.")
+        return
+    await update.message.reply_text(
+        "Starting the backtest terminal and waiting for it to connect "
+        "(up to 4 minutes on a slow machine)…"
+    )
+    ok, report = await asyncio.to_thread(warm_up)
+    STATE["login_ok"] = ok
+    await update.message.reply_text(trim(report))
+
+
+async def cmd_diag(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Show which account the backtest terminal would use, and its recent journal."""
+    if not authorised(update):
+        return
+    running = await asyncio.to_thread(terminal_running)
+    text = (
+        f".env login: {config.MT5_LOGIN or '(not set)'}\n"
+        f".env server: {config.MT5_SERVER or '(not set)'}\n"
+        f".env password: {'set' if config.MT5_PASSWORD else 'not set'}\n"
+        f"Saved in backtest terminal: {saved_account_summary()}\n"
+        f"terminal64.exe running now: {'YES' if running else 'no'}\n"
+        f"Connected this session: {'yes' if STATE['login_ok'] else 'not yet'}\n\n"
+        "TERMINAL JOURNAL " + journal_tail(30)
+    )
+    await update.message.reply_text(trim(text))
+
+
 async def cmd_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not authorised(update):
         return
@@ -160,7 +242,8 @@ async def cmd_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Include source: {source if source else 'not set'}\n"
         f"Backtest terminal: {config.MQL5_DIR}\n"
         f"Synced: Include, Libraries, Indicators{extra}\n"
-        f"Last sync: {syncer.LAST_SYNC}"
+        f"Last sync: {syncer.LAST_SYNC}\n"
+        f"Account configured: {'yes' if account_configured() else 'NO'}"
     )
 
 
@@ -254,9 +337,8 @@ async def process(app: Application, sub: Submission):
 
     sub.state = "compiling"
     try:
-        copied = await asyncio.to_thread(syncer.sync_sources)
-        if copied:
-            await say(f"📂 Synced {copied} include/library file(s) from your main terminal.")
+        await asyncio.to_thread(syncer.sync_sources)
+        await say(f"📂 Include sync: {syncer.LAST_SYNC}")
     except Exception as exc:  # a failed sync should not block the backtest
         await say(f"⚠️ Include sync failed: {exc}")
     await say(f"⚙️ Compiling {sub.ea_name}…")
@@ -266,6 +348,26 @@ async def process(app: Application, sub: Submission):
         return
     if result.warnings:
         await say(f"Compiled with {result.warnings} warning(s).")
+
+    if await asyncio.to_thread(terminal_running):
+        await say(
+            "⚠️ A terminal64.exe is already running. If it is the backtest terminal "
+            "(C:\\MT5_Backtest) close it, or the tester launch will not work."
+        )
+
+    # Connect once per bot session. The tester only waits about a minute for a
+    # connection, so on a slow machine it must be connected beforehand.
+    if not STATE["login_ok"]:
+        await say(
+            "🔌 Connecting the backtest terminal to your broker "
+            "(the first time can take a few minutes)…"
+        )
+        ok, report = await asyncio.to_thread(warm_up)
+        STATE["login_ok"] = ok
+        await say(trim(report))
+        if not ok:
+            await say("Stopped before running the test. Fix the login, then resend the EA.")
+            return
 
     sub.state = "running"
     total = len(sub.runs)
@@ -288,8 +390,13 @@ async def process(app: Application, sub: Submission):
             settings=sub.settings,
             report_rel=f"{config.REPORT_REL_PREFIX}\\{stem}",
         )
+        # kept for the failure message below, with the password masked
+        ini_preview = re.sub(
+            r"(?im)^(Password=).*$", r"\1***", ini_path.read_text(encoding="utf-8")
+        )
 
         await say(f"▶️ Running {tag}…")
+        started = time.time()
         try:
             await asyncio.to_thread(RUNNER.run, ini_path, config.TEST_TIMEOUT_S)
         except subprocess.TimeoutExpired:
@@ -304,10 +411,19 @@ async def process(app: Application, sub: Submission):
 
         outputs = collect_outputs(stem)
         if outputs.html is None:
+            tail = tester_log_tail()
+            if "not synchronized" in tail.lower():
+                STATE["login_ok"] = False  # reconnect before the next submission
             await say(
-                f"❌ Run {tag} produced no report. Last tester log lines:\n"
-                + trim(tester_log_tail())
+                f"❌ Run {tag} produced no report. Last tester log lines:\n" + trim(tail)
             )
+            await say(
+                "Terminal journal for this run only:\n" + trim(journal_since(started))
+            )
+            hint = diagnose(tail)
+            if hint:
+                await say("💡 " + hint)
+            await say("Tester config used (password hidden):\n" + ini_preview)
             continue
 
         stats = parse_report(outputs.html)
@@ -359,6 +475,8 @@ def main():
     app.add_handler(CommandHandler("inputs", cmd_inputs))
     app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("resetconfig", cmd_resetconfig))
+    app.add_handler(CommandHandler("login", cmd_login))
+    app.add_handler(CommandHandler("diag", cmd_diag))
     app.add_handler(CommandHandler("source", cmd_source))
     app.add_handler(CommandHandler("setsource", cmd_setsource))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))

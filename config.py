@@ -47,7 +47,12 @@ REPORT_REL_PREFIX = "reports"                            # relative to TERMINAL_
 # compile the bot copies newer files from it into the backtest terminal:
 #   Include\, Libraries\, Indicators\   -> same folders in the backtest terminal
 #   Experts\<SYNC_EXPERTS_SUBDIR>\*.mqh -> Experts\BacktestBot\ (for #include "x.mqh")
-_sync_src = os.getenv("SYNC_SOURCE_MQL5", "").strip()
+#
+# Both SYNC_SOURCE_MQL5 and SOURCE_MQL5_DIR are accepted (the README used both
+# names). Quotes around the path are stripped.
+_sync_src = (
+    os.getenv("SYNC_SOURCE_MQL5") or os.getenv("SOURCE_MQL5_DIR") or ""
+).strip().strip('"').strip("'")
 SYNC_SOURCE_MQL5 = Path(_sync_src) if _sync_src else None
 SYNC_EXPERTS_SUBDIR = os.getenv("SYNC_EXPERTS_SUBDIR", "Advisors").strip()
 
