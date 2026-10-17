@@ -42,7 +42,13 @@ def write_set_file(path: Path, inputs: dict) -> None:
 def write_tester_ini(path: Path, *, expert_rel: str, set_name: str, settings: dict,
                      report_rel: str) -> None:
     """Write the [Tester] ini that `terminal64.exe /config:` consumes."""
-    lines = ["[Tester]", f"Expert={expert_rel}"]
+    lines = []
+    if config.MT5_LOGIN and config.MT5_SERVER:
+        lines += ["[Common]", f"Login={config.MT5_LOGIN}"]
+        if config.MT5_PASSWORD:
+            lines.append(f"Password={config.MT5_PASSWORD}")
+        lines += [f"Server={config.MT5_SERVER}", ""]
+    lines += ["[Tester]", f"Expert={expert_rel}"]
     if set_name:
         lines.append(f"ExpertParameters={set_name}")
     lines += [

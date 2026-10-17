@@ -79,6 +79,11 @@ either the `...\MQL5` folder or the data folder that contains it.
 
 I could not run MetaTrader here, so test with one short date range first:
 
+- **"tester not started because the account is not specified"** in the tester log: the
+  backtest terminal has no saved account. Log in by hand while it is started with
+  `/portable` (afterwards `C:\MT5_Backtest\config\common.ini` should contain your login),
+  or set `MT5_LOGIN`, `MT5_SERVER` (and optionally `MT5_PASSWORD`) in `.env` so the bot
+  passes the account to the tester itself.
 - **Report file name/extension**: expect `reports\<id>_1.htm` plus a `.png`. If the bot
   says "produced no report", check what landed in `reports\` and the tester log lines it
   prints.

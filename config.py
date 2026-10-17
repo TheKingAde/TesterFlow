@@ -53,6 +53,15 @@ SYNC_EXPERTS_SUBDIR = os.getenv("SYNC_EXPERTS_SUBDIR", "Advisors").strip()
 
 # Can also be changed at runtime from Telegram with /setsource (see syncer.py).
 
+# --- Optional: account the tester should run under -------------------------
+# Normally the portable terminal reuses the account you logged in with by hand. If the
+# tester log says "account is not specified", set these and the bot passes the account
+# in the tester config. The password is optional if the terminal already saved it.
+# Use a DEMO account: the password sits in .env (and briefly in the tester ini).
+MT5_LOGIN = os.getenv("MT5_LOGIN", "").strip()
+MT5_SERVER = os.getenv("MT5_SERVER", "").strip()
+MT5_PASSWORD = os.getenv("MT5_PASSWORD", "").strip()
+
 # --- Local working files ---------------------------------------------------
 WORK_DIR = Path(os.getenv("WORK_DIR", "work")).resolve()  # ini files, compile logs
 

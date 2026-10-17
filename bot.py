@@ -295,6 +295,9 @@ async def process(app: Application, sub: Submission):
         except subprocess.TimeoutExpired:
             await say(f"⏱ Run {tag} timed out and was killed.")
             continue
+        finally:
+            if config.MT5_PASSWORD:
+                ini_path.unlink(missing_ok=True)  # the ini holds the account password
         if sub.cancelled:
             await say("Cancelled. Skipping remaining runs.")
             return
