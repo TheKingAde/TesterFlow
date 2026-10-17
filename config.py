@@ -40,6 +40,19 @@ PROFILES_TESTER = MQL5_DIR / "Profiles" / "Tester"       # .set files for the te
 REPORTS_DIR = TERMINAL_DIR / "reports"                   # tester reports land here
 REPORT_REL_PREFIX = "reports"                            # relative to TERMINAL_DIR
 
+# --- Optional: sync custom includes from your normal terminal --------------
+# Your everyday terminal keeps its files in a hashed data folder, e.g.
+#   C:\Users\<you>\AppData\Roaming\MetaQuotes\Terminal\<HASH>\MQL5
+# The backtest terminal (portable) cannot see that folder, so before every
+# compile the bot copies newer files from it into the backtest terminal:
+#   Include\, Libraries\, Indicators\   -> same folders in the backtest terminal
+#   Experts\<SYNC_EXPERTS_SUBDIR>\*.mqh -> Experts\BacktestBot\ (for #include "x.mqh")
+_sync_src = os.getenv("SYNC_SOURCE_MQL5", "").strip()
+SYNC_SOURCE_MQL5 = Path(_sync_src) if _sync_src else None
+SYNC_EXPERTS_SUBDIR = os.getenv("SYNC_EXPERTS_SUBDIR", "Advisors").strip()
+
+# Can also be changed at runtime from Telegram with /setsource (see syncer.py).
+
 # --- Local working files ---------------------------------------------------
 WORK_DIR = Path(os.getenv("WORK_DIR", "work")).resolve()  # ini files, compile logs
 

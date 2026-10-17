@@ -19,6 +19,20 @@ full HTML report. Submissions queue and run one at a time.
 6. `python bot.py`. To keep it running after you close RDP, use NSSM or Task Scheduler
    ("run at startup").
 
+## Custom includes and libraries
+
+The compiler only searches the backtest terminal's own `MQL5` folder (because of
+`/portable`), not the hashed `AppData\Roaming\MetaQuotes\Terminal\<HASH>` folder of your
+everyday terminal. Set `SYNC_SOURCE_MQL5` in `.env` to that terminal's `MQL5` folder and
+the bot copies newer files into the backtest terminal before every compile:
+
+- `Include\`, `Libraries\`, `Indicators\` go to the same folders in the backtest terminal
+  (so `#include <MyLib\x.mqh>` and `iCustom` indicators work).
+- `Experts\<SYNC_EXPERTS_SUBDIR>\*.mqh` goes to `Experts\BacktestBot\` (so
+  `#include "x.mqh"` next to the EA works). Default subfolder is `Advisors`.
+
+Sync only adds or updates files; it never deletes anything.
+
 ## Usage
 
 Send a `.mq5` file with a caption (max 1024 characters), or send the config as a normal
@@ -34,6 +48,21 @@ run tight: Lots=0.2 RR=3
 - Each `run` line is one backtest with those EA input overrides.
 - No `run` lines: a single run with the EA's default inputs.
 - Commands: `/queue`, `/cancel`, `/clear`, `/inputs`, `/config`, `/resetconfig`.
+
+## Includes and libraries (your .mqh files)
+
+Your real terminal keeps its MQL5 folder under a hashed AppData path. The backtest
+terminal is a separate portable copy, so it does not see those files by itself. Set the
+source path and the bot copies them over before every compile:
+
+- In `.env`: `SOURCE_MQL5_DIR=C:\Users\...\MetaQuotes\Terminal\<hash>\MQL5`
+- Or from Telegram at any time: `/setsource <path>` (`/source` shows the current value,
+  `/setsource off` disables it). The Telegram value overrides `.env` and is remembered.
+
+It copies only new or changed files from `Include`, `Libraries` and `Indicators`
+(`SYNC_SUBDIRS` in `.env` changes that list), plus any `.mqh` files sitting in the source's
+`Experts\Advisors` folder, so `#include "File.mqh"` (quotes) also resolves. You can paste
+either the `...\MQL5` folder or the data folder that contains it.
 
 ## How each run works
 

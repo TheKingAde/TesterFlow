@@ -20,6 +20,7 @@ from telegram.ext import (
 )
 
 import config
+import syncer
 from compiler import compile_ea
 from jobs import Run, Submission, parse_config
 from mt5files import parse_inputs, read_text_any, write_set_file, write_tester_ini
@@ -54,7 +55,10 @@ model: 0 every tick, 1 1-min OHLC, 2 open prices, 4 real ticks
 /cancel stop the running backtest and skip the rest of that file
 /clear  drop everything still waiting
 /inputs list the inputs found in your last uploaded EA
-/config show your saved config      /resetconfig  forget it"""
+/config show your saved config      /resetconfig  forget it
+/source show where includes are copied from before each compile
+/setsource <path>  set that MQL5 folder (or the terminal data folder that
+        contains it); '/setsource off' disables syncing"""
 
 
 # --------------------------------------------------------------------------
@@ -147,6 +151,33 @@ async def cmd_resetconfig(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Saved config cleared.")
 
 
+async def cmd_source(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not authorised(update):
+        return
+    source = syncer.get_source()
+    extra = f", Experts\\{config.SYNC_EXPERTS_SUBDIR}\\*.mqh" if config.SYNC_EXPERTS_SUBDIR else ""
+    await update.message.reply_text(
+        f"Include source: {source if source else 'not set'}\n"
+        f"Backtest terminal: {config.MQL5_DIR}\n"
+        f"Synced: Include, Libraries, Indicators{extra}\n"
+        f"Last sync: {syncer.LAST_SYNC}"
+    )
+
+
+async def cmd_setsource(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not authorised(update):
+        return
+    raw = " ".join(context.args).strip()
+    if not raw:
+        await update.message.reply_text(
+            "Usage: /setsource C:\\Users\\Administrator\\AppData\\Roaming\\MetaQuotes"
+            "\\Terminal\\<hash>\\MQL5\nor /setsource off"
+        )
+        return
+    ok, message = syncer.set_source(raw)
+    await update.message.reply_text(("✅ " if ok else "❌ ") + message)
+
+
 async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """A plain text message in config syntax becomes the saved config."""
     if not authorised(update):
@@ -222,6 +253,12 @@ async def process(app: Application, sub: Submission):
     say = lambda text: bot.send_message(sub.chat_id, text)
 
     sub.state = "compiling"
+    try:
+        copied = await asyncio.to_thread(syncer.sync_sources)
+        if copied:
+            await say(f"📂 Synced {copied} include/library file(s) from your main terminal.")
+    except Exception as exc:  # a failed sync should not block the backtest
+        await say(f"⚠️ Include sync failed: {exc}")
     await say(f"⚙️ Compiling {sub.ea_name}…")
     result = await asyncio.to_thread(compile_ea, sub.source_path)
     if not result.ok:
@@ -319,6 +356,8 @@ def main():
     app.add_handler(CommandHandler("inputs", cmd_inputs))
     app.add_handler(CommandHandler("config", cmd_config))
     app.add_handler(CommandHandler("resetconfig", cmd_resetconfig))
+    app.add_handler(CommandHandler("source", cmd_source))
+    app.add_handler(CommandHandler("setsource", cmd_setsource))
     app.add_handler(MessageHandler(filters.Document.ALL, on_document))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, on_text))
     app.run_polling()
